@@ -1,6 +1,10 @@
 import type { ApiResponse } from './types';
 import { ApiError } from './types';
 
+// When VITE_API_BASE_URL is set (EC2 / production), hit the backend directly.
+// When unset (local dev), fall back to '/api' which the Vite proxy rewrites to localhost:8002.
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api';
+
 async function fetchWithTimeout(
   url: string,
   timeoutMs: number,
@@ -30,7 +34,7 @@ export async function fetchRecommendationsApi(
   });
 
   const response = await fetchWithTimeout(
-    `/api/recommendations?${params}`,
+    `${API_BASE}/recommendations?${params}`,
     5000,
   );
 
@@ -56,7 +60,7 @@ export async function checkHealthApi(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
-    const response = await fetch('/api/health', {
+    const response = await fetch(`${API_BASE}/health`, {
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
