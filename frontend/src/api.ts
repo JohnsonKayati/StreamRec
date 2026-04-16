@@ -65,3 +65,4 @@ export async function checkHealthApi(): Promise<boolean> {
     return false;
   }
 }
+

@@ -40,7 +40,7 @@ export default function RecommendationCard({
         </div>
 
         <div className="flex-1 min-w-0">
-          {/* Item ID + popularity badge */}
+          {/* Item ID + badges */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-sm font-medium text-gray-900">
               {item_id}

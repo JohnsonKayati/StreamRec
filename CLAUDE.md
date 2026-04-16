@@ -12,6 +12,9 @@ StreamRec is a real-time streaming recommendation system built to demonstrate pr
 # Start all infrastructure and application services
 docker compose -f infra/docker-compose.yml up -d
 
+# Seed the database with synthetic data (required before first training run)
+docker compose -f infra/docker-compose.yml --profile seed run --rm seed
+
 # Run training (one-off; writes artifacts to the model_artifacts volume)
 docker compose -f infra/docker-compose.yml --profile training run --rm training
 
@@ -29,12 +32,15 @@ Service ports:
 
 ## Running Training Locally (outside Docker)
 
+All local commands require `PYTHONPATH=.` (repo root) so that `shared/` resolves as a top-level package.
+
 ```bash
-# Seed the database with synthetic data first
-python -m training.data.generate_synthetic --users 1000 --items 500 --events 100000
+# Seed the database with synthetic data first (targets localhost:5432 by default)
+PYTHONPATH=. python -m training.data.generate_synthetic --users 1000 --items 500 --events 100000
+# Pass --db-url to override: --db-url postgresql://user:pass@host:5432/db
 
 # Run training; writes artifacts to ./artifacts/ by default
-python -m training.train
+PYTHONPATH=. python -m training.train
 ```
 
 All `TRAINING_*` env vars override defaults (e.g. `TRAINING_EMBEDDING_DIM=128`).
@@ -115,6 +121,26 @@ Each service uses `pydantic-settings` with an env-var prefix:
 | training | `TRAINING_` | `.env` at repo root |
 
 Docker Compose injects the in-network container hostnames (e.g. `KAFKA_BOOTSTRAP_SERVERS=kafka:9093`) as overrides on top of any `.env` file.
+
+## Frontend (`frontend/`)
+
+React + Vite + TypeScript + Tailwind CSS v4 + Zustand single-page app.
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server on http://localhost:5173, proxies /api → localhost:8002
+npm run build    # production build to frontend/dist/
+```
+
+The Vite dev proxy strips the `/api` prefix before forwarding to the inference service, so the frontend never needs CORS headers. The backend must be running on port 8002 before opening the UI.
+
+Key files:
+- `src/store.ts` — Zustand store; all API state lives here
+- `src/api.ts` — `fetch` wrappers with 5s timeout and typed error classes
+- `src/lib/fake-metadata.ts` — deterministic `item_id → name/category` mapping (no real catalog needed)
+- `src/components/ControlBar.tsx` — user ID input, k slider, quick-pick buttons (Known/Cold Start/Random)
+- `src/components/DiagnosticsPanel.tsx` — model name, latency (color-coded), cache HIT/MISS, request history
 
 ## Key Design Constraints
 

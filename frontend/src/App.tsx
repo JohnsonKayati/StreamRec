@@ -4,12 +4,14 @@ import Header from './components/Header';
 import ControlBar from './components/ControlBar';
 import ErrorBanner from './components/ErrorBanner';
 import RecommendationPanel from './components/RecommendationPanel';
+import ComparePanel from './components/ComparePanel';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 
 const HEALTH_POLL_INTERVAL_MS = 30_000;
 
 export default function App() {
   const checkHealth = useStore((s) => s.checkHealth);
+  const compareMode = useStore((s) => s.compareMode);
 
   // Poll health on mount and every 30 seconds
   useEffect(() => {
@@ -31,9 +33,9 @@ export default function App() {
 
         {/* Two-column layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          {/* Recommendations — 2/3 width */}
+          {/* Recommendations / Compare — 2/3 width */}
           <div className="lg:col-span-2 min-w-0">
-            <RecommendationPanel />
+            {compareMode ? <ComparePanel /> : <RecommendationPanel />}
           </div>
 
           {/* Diagnostics — 1/3 width */}

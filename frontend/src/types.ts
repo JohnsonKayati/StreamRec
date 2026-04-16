@@ -20,6 +20,13 @@ export interface HistoryEntry {
   timestamp: number;
 }
 
+/** One data point for the latency sparkline — newest-first in the store array. */
+export interface LatencyPoint {
+  latencyMs: number;
+  cached: boolean;
+  timestamp: number;
+}
+
 export type ErrorType = 'network' | '503' | '422' | 'timeout' | null;
 
 export class ApiError extends Error {
@@ -31,3 +38,4 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+

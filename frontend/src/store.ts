@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { fetchRecommendationsApi, checkHealthApi } from './api';
-import type { Recommendation, HistoryEntry, ErrorType } from './types';
+import type { Recommendation, HistoryEntry, ErrorType, LatencyPoint } from './types';
 import { ApiError } from './types';
 
 const MAX_HISTORY = 5;
+const MAX_LATENCY_HISTORY = 10;
 
 interface StoreState {
   // Inputs
@@ -23,12 +24,19 @@ interface StoreState {
   errorType: ErrorType;
   isHealthy: boolean;
 
+  // View mode
+  compareMode: boolean;
+
   // History
   requestHistory: HistoryEntry[];
+
+  // Sparkline data — newest-first, max 10 entries
+  latencyHistory: LatencyPoint[];
 
   // Actions
   setUserId: (id: string) => void;
   setK: (k: number) => void;
+  setCompareMode: (v: boolean) => void;
   fetchRecommendations: () => Promise<void>;
   checkHealth: () => Promise<void>;
 }
@@ -45,10 +53,13 @@ export const useStore = create<StoreState>((set, get) => ({
   error: null,
   errorType: null,
   isHealthy: false,
+  compareMode: false,
   requestHistory: [],
+  latencyHistory: [],
 
   setUserId: (id) => set({ userId: id }),
   setK: (k) => set({ k }),
+  setCompareMode: (v) => set({ compareMode: v }),
 
   fetchRecommendations: async () => {
     const { userId, k } = get();
@@ -63,9 +74,15 @@ export const useStore = create<StoreState>((set, get) => ({
     try {
       const data = await fetchRecommendationsApi(userId.trim(), k);
 
-      const entry: HistoryEntry = {
+      const historyEntry: HistoryEntry = {
         userId: userId.trim(),
         modelName: data.model_name,
+        latencyMs: data.latency_ms,
+        cached: data.served_from_cache,
+        timestamp: Date.now(),
+      };
+
+      const latencyPoint: LatencyPoint = {
         latencyMs: data.latency_ms,
         cached: data.served_from_cache,
         timestamp: Date.now(),
@@ -81,8 +98,12 @@ export const useStore = create<StoreState>((set, get) => ({
         error: null,
         errorType: null,
         requestHistory: [
-          entry,
+          historyEntry,
           ...state.requestHistory.slice(0, MAX_HISTORY - 1),
+        ],
+        latencyHistory: [
+          latencyPoint,
+          ...state.latencyHistory.slice(0, MAX_LATENCY_HISTORY - 1),
         ],
       }));
     } catch (err) {

@@ -1,0 +1,71 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.pyc
+
+# ========================
+# Virtual environments
+# ========================
+.venv/
+venv/
+env/
+
+# ========================
+# Environment variables (CRITICAL)
+# ========================
+.env
+*.env
+
+# ========================
+# Logs
+# ========================
+*.log
+
+# ========================
+# OS / Editor junk
+# ========================
+.claude/
+.DS_Store
+CLAUDE.md
+Thumbs.db
+.vscode/
+
+# ========================
+# Zip / artifacts
+# ========================
+*.zip
+
+# ========================
+# Databases
+# ========================
+*.sqlite3
+*.db
+
+# ========================
+# Docker
+# ========================
+# Ignore container runtime data, NOT config
+docker-data/
+*.pid
+
+# If you ever add volumes locally:
+postgres-data/
+kafka-data/
+zookeeper-data/
+
+# ========================
+# ML / training artifacts
+# ========================
+# (you WILL generate these later)
+models/
+checkpoints/
+*.pt
+*.pth
+*.npy
+
+# ========================
+# Cache / temp
+# ========================
+tmp/
+.cache/
