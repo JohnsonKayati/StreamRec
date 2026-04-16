@@ -61,7 +61,7 @@ class MFRecommender:
         bundle   = self._bundle
         user_idx = bundle.user2idx.get(user_id)
         if user_idx is None:
-            logger.debug("mf_cold_start user_id=%s", user_id)
+            logger.info("mf_cold_start user_id=%s — user not in training index, caller should fall back to popularity", user_id)
             return None
 
         device = bundle.device

@@ -138,8 +138,16 @@ def _mf_recommend(
     device: torch.device,
     user_id: str,
     k: int,
+    train_user_items: dict[int, set[int]] | None = None,
 ) -> list[str]:
-    """Score all items for a user, mask seen items, return top-K item_ids."""
+    """Score all items for a user, mask seen items, return top-K item_ids.
+
+    train_user_items: when provided, only mask items the user saw in the
+    training split.  Pass None (or omit) for production serving where all
+    previously seen items should be excluded.  During offline evaluation,
+    pass only the train-split seen set so that held-out test items are
+    reachable and NDCG/Recall are meaningful.
+    """
     user_idx = matrix.user2idx.get(user_id)
     if user_idx is None:
         return []
@@ -151,8 +159,15 @@ def _mf_recommend(
 
     scores = model(user_tensor, item_tensor).cpu()  # (n_items,)
 
-    # Mask items the user has already seen so we don't recommend them
-    for seen_idx in matrix.user_items.get(user_idx, set()):
+    # Mask items the user has already seen so we don't recommend them.
+    # Use train_user_items during evaluation so held-out test items are not
+    # masked out — masking them makes NDCG/Recall trivially zero.
+    mask_set = (
+        train_user_items.get(user_idx, set())
+        if train_user_items is not None
+        else matrix.user_items.get(user_idx, set())
+    )
+    for seen_idx in mask_set:
         scores[seen_idx] = -1.0
 
     top_k_indices = scores.topk(k).indices.tolist()
@@ -208,8 +223,25 @@ def run() -> None:
     popularity = PopularityRecommender()
     popularity.fit(interactions)
 
+    # Build a train-only seen set for evaluation masking.
+    # test items must remain reachable so NDCG/Recall are meaningful;
+    # masking them with the full user_seen set makes both metrics trivially 0.
+    train_seen_by_uid: dict[str, set[str]] = {}
+    for u_idx, it_idx, _ in train_data:
+        uid  = matrix.idx2user[u_idx]
+        iid  = matrix.idx2item[it_idx]
+        train_seen_by_uid.setdefault(uid, set()).add(iid)
+
+    # train_user_items is the index-space equivalent used by _mf_recommend
+    train_user_items: dict[int, set[int]] = {}
+    for u_idx, it_idx, _ in train_data:
+        train_user_items.setdefault(u_idx, set()).add(it_idx)
+
     pop_metrics = evaluate_recommender(
-        recommend_fn=lambda uid, k: [iid for iid, _ in popularity.recommend(uid, k)],
+        recommend_fn=lambda uid, k: [
+            iid for iid, _ in popularity.recommend(uid, k, exclude_seen=False)
+            if iid not in train_seen_by_uid.get(uid, set())
+        ],
         ground_truth=test_ground_truth,
         k=settings.eval_k,
     )
@@ -267,7 +299,9 @@ def run() -> None:
         mf_model.load_state_dict(best_state)
 
     mf_metrics = evaluate_recommender(
-        recommend_fn=lambda uid, k: _mf_recommend(mf_model, matrix, device, uid, k),
+        recommend_fn=lambda uid, k: _mf_recommend(
+            mf_model, matrix, device, uid, k, train_user_items
+        ),
         ground_truth=test_ground_truth,
         k=settings.eval_k,
     )

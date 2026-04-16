@@ -272,6 +272,45 @@ services:
       - model_artifacts:/app/artifacts
 
 # ---------------------------------------------------------------------------
+# Seed (on-demand — not started by default)
+#
+# Populates PostgreSQL with synthetic users, items, and events so that the
+# training pipeline has data to learn from.  Must be run before training.
+#
+# Run with:
+#   docker compose -f infra/docker-compose.yml --profile seed run --rm seed
+#
+# Safe to re-run — all inserts use ON CONFLICT DO NOTHING.
+# ---------------------------------------------------------------------------
+
+  seed:
+    build:
+      context: ..
+      dockerfile: training/Dockerfile
+    container_name: streamrec-seed
+    profiles: [seed]
+    networks: [streamrec]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    command:
+      - python
+      - -m
+      - training.data.generate_synthetic
+      - --db-url
+      - postgresql://streamrec:streamrec_dev@postgres:5432/streamrec
+      - --users
+      - "1000"
+      - --items
+      - "500"
+      - --events
+      - "100000"
+
+# ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
 

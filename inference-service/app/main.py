@@ -265,8 +265,9 @@ async def get_recommendations(
             raw_results = mf_result
             model_name  = "mf"
         else:
-            # Cold start — user not in training index
+            # Cold start — user not in training index; fall back to popularity
             COLD_START_TOTAL.inc()
+            logger.info("cold_start_fallback user_id=%s — serving popularity baseline", user_id)
             if pop_rec is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
