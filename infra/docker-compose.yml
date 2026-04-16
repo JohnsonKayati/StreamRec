@@ -1,0 +1,289 @@
+# StreamRec — Local development stack
+#
+# AWS equivalents:
+#   zookeeper / kafka  → Amazon MSK (managed Kafka)
+#   postgres           → Amazon RDS PostgreSQL or Aurora
+#   redis              → Amazon ElastiCache for Redis
+#   event-producer     → ECS Fargate + ALB
+#   stream-processor   → ECS Fargate (consumer group)
+#   inference-service  → ECS Fargate + ALB  or  Lambda + Function URL
+#   prometheus         → Amazon CloudWatch + Container Insights
+#
+# Build context for all application services is the repository root (context: ..)
+# so each Dockerfile can COPY shared/ alongside its own app/ directory.
+#
+# Usage:
+#   docker compose -f infra/docker-compose.yml up -d
+#
+# Run training (one-off, writes artifacts to the model_artifacts volume):
+#   docker compose -f infra/docker-compose.yml --profile training run --rm training
+
+name: streamrec
+
+networks:
+  streamrec:
+    driver: bridge
+
+volumes:
+  postgres_data:    # PostgreSQL WAL + tables — persisted across restarts
+  redis_data:       # Redis AOF snapshot — survives container restarts
+  model_artifacts:  # Trained model files written by training, read by inference-service
+
+# ---------------------------------------------------------------------------
+# Infrastructure
+# ---------------------------------------------------------------------------
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: streamrec-zookeeper
+    networks: [streamrec]
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: streamrec-kafka
+    networks: [streamrec]
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"   # EXTERNAL: reachable from the host (local scripts, tools)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two listeners:
+      #   PLAINTEXT_HOST → bound on 0.0.0.0:9092, advertised as localhost:9092 (host tools)
+      #   PLAINTEXT      → bound on 0.0.0.0:9093, advertised as kafka:9093 (containers)
+      # KAFKA_LISTENERS tells the broker which address/port to actually bind.
+      # Without it, Confluent's cp-kafka derives listeners from ADVERTISED_LISTENERS,
+      # which fails when the advertised hostname (kafka / localhost) doesn't match
+      # any local interface — resulting in "No listeners bound" at startup.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9093,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 104857600   # 100 MB
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot container: creates topics with explicit partition counts and exits.
+  # restart: "no" is correct — re-creating already-existing topics is a no-op
+  # but we don't want this to restart in a loop if kafka is slow to start.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: streamrec-kafka-init
+    networks: [streamrec]
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    # No outer quotes around the block scalar — with entrypoint ["/bin/bash", "-c"]
+    # the command value is passed verbatim as the -c argument.  Wrapping it in "..."
+    # makes bash treat the leading " as the start of a quoted command name, which
+    # causes "Missing required argument" before any kafka-topics call is reached.
+    # Each topic creation is on a single line to avoid backslash-continuation
+    # ambiguity inside a -c string.
+    command: |
+      echo 'Waiting for Kafka to be fully ready...'
+      until kafka-topics --bootstrap-server kafka:9093 --list > /dev/null 2>&1; do
+        echo 'Kafka not ready yet, retrying in 2s...'
+        sleep 2
+      done
+      echo 'Creating Kafka topics...'
+      kafka-topics --bootstrap-server kafka:9093 --create --if-not-exists --topic user-events     --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9093 --create --if-not-exists --topic feature-updates --partitions 2 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9093 --create --if-not-exists --topic model-triggers  --partitions 1 --replication-factor 1
+      echo 'Topics ready:'
+      kafka-topics --bootstrap-server kafka:9093 --list
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: streamrec-postgres
+    networks: [streamrec]
+    restart: unless-stopped
+    ports:
+      - "5432:5432"   # exposed for local psql / DBeaver access
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # init.sql runs once on first start (when data volume is empty)
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      POSTGRES_DB: streamrec
+      POSTGRES_USER: streamrec
+      POSTGRES_PASSWORD: streamrec_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamrec -d streamrec"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: streamrec-redis
+    networks: [streamrec]
+    restart: unless-stopped
+    ports:
+      - "6379:6379"   # exposed for local redis-cli access
+    volumes:
+      - redis_data:/data
+    # AOF persistence + LRU eviction so the hot feature store survives restarts
+    # but never runs out of memory. 512 MB is sufficient for dev; tune for prod.
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ---------------------------------------------------------------------------
+# Application services
+# ---------------------------------------------------------------------------
+
+  event-producer:
+    build:
+      context: ..                            # repo root — gives COPY access to shared/
+      dockerfile: event-producer/Dockerfile
+    container_name: streamrec-event-producer
+    networks: [streamrec]
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # Override localhost defaults with in-network container hostnames.
+      # event-producer has no prefix (pydantic-settings picks up bare names).
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      KAFKA_TOPIC_USER_EVENTS: user-events
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  stream-processor:
+    build:
+      context: ..
+      dockerfile: stream-processor/Dockerfile
+    container_name: streamrec-stream-processor
+    networks: [streamrec]
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # stream-processor also has no env prefix.
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      KAFKA_TOPIC_USER_EVENTS: user-events
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://streamrec:streamrec_dev@postgres:5432/streamrec
+
+  inference-service:
+    build:
+      context: ..
+      dockerfile: inference-service/Dockerfile
+    container_name: streamrec-inference
+    networks: [streamrec]
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # inference-service uses INFERENCE_ prefix (see inference-service/app/config.py).
+      INFERENCE_REDIS_URL: redis://redis:6379/0
+      INFERENCE_ARTIFACT_DIR: /app/artifacts
+      INFERENCE_RECS_CACHE_TTL_S: "300"
+    volumes:
+      # model_artifacts is populated by the training profile service below.
+      # Mount read-only so the inference container cannot corrupt the artifacts.
+      - model_artifacts:/app/artifacts:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s   # allow extra time for torch model loading
+
+# ---------------------------------------------------------------------------
+# Training (on-demand — not started by default)
+#
+# Run with:
+#   docker compose -f infra/docker-compose.yml --profile training run --rm training
+#
+# Writes MF + popularity artifacts to the model_artifacts volume, which the
+# inference-service mounts read-only.  The inference container must be
+# restarted after training to pick up new artifacts:
+#   docker compose -f infra/docker-compose.yml restart inference-service
+# ---------------------------------------------------------------------------
+
+  training:
+    build:
+      context: ..
+      dockerfile: training/Dockerfile
+    container_name: streamrec-training
+    profiles: [training]
+    networks: [streamrec]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      TRAINING_DATABASE_URL: postgresql://streamrec:streamrec_dev@postgres:5432/streamrec
+      TRAINING_ARTIFACT_DIR: /app/artifacts
+    volumes:
+      - model_artifacts:/app/artifacts
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: streamrec-prometheus
+    networks: [streamrec]
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"

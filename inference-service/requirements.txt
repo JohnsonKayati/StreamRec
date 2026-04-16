@@ -1,0 +1,9 @@
+fastapi>=0.111
+uvicorn[standard]>=0.29
+pydantic>=2.0
+pydantic-settings>=2.0
+redis>=5.0
+prometheus-client>=0.20
+# CPU-only torch is sufficient for inference and keeps the image ~1.5 GB smaller.
+# To use: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0
