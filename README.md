@@ -90,40 +90,13 @@ MF delivers ~39% NDCG improvement over the popularity baseline on the synthetic 
 
 ## Getting Started
 
+The backend is deployed on AWS (EC2 + RDS + S3). To run the dashboard locally against the live backend:
+
 ### Prerequisites
 
-- Docker and Docker Compose
-- Node.js 18+ (for frontend dev)
+- Node.js 18+
 
-### 1. Start the full stack
-
-```bash
-docker compose -f infra/docker-compose.yml up -d
-```
-
-### 2. Seed the database
-
-```bash
-docker compose -f infra/docker-compose.yml --profile seed run --rm seed
-```
-
-Generates 1,000 users (`user_0000`–`user_0999`), 500 items, and 100,000 synthetic interaction events.
-
-### 3. Train the models
-
-```bash
-docker compose -f infra/docker-compose.yml --profile training run --rm training
-```
-
-Artifacts are written to the `model_artifacts` Docker volume.
-
-### 4. Reload inference
-
-```bash
-docker compose -f infra/docker-compose.yml restart inference-service
-```
-
-### 5. Start the frontend
+### Run the frontend
 
 ```bash
 cd frontend
@@ -131,7 +104,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The Vite dev server proxies `/api/*` → `localhost:8002` and `/events` → `localhost:8001`.
+Open [http://localhost:5173](http://localhost:5173). The frontend is pre-configured to talk to the live AWS backend via `VITE_API_BASE_URL` in `frontend/.env`.
 
 ---
 
