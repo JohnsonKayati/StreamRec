@@ -1,6 +1,6 @@
 # StreamRec
 
-A production-grade real-time recommendation system demonstrating end-to-end ML infrastructure patterns — from event ingestion through stream processing, offline training, and live inference, to a full-featured React dashboard.
+A production-oriented real-time recommendation system demonstrating end-to-end ML infrastructure patterns — from event ingestion through stream processing, offline training, and live inference, to a full-featured React dashboard.
 
 ---
 
@@ -69,12 +69,14 @@ event-producer          Kafka: user-events          stream-processor
 score(u, i) = sigmoid( <U_u, V_i> + b_u + b_i )
 ```
 
+The following metrics were evaluated on a held-out split of the synthetic dataset (1,000 users, 500 items, 100,000 events):
+
 | Model | NDCG@10 | Recall@10 |
 |---|---|---|
 | Popularity baseline | 0.2412 | 0.2100 |
 | Matrix Factorization | **0.3351** | **0.3732** |
 
-MF delivers ~39% NDCG improvement over the popularity baseline on the synthetic holdout set.
+MF delivers ~39% NDCG improvement over the popularity baseline on this synthetic evaluation set.
 
 ---
 
@@ -96,7 +98,15 @@ The backend is deployed on AWS (EC2 + RDS + S3). To run the dashboard locally ag
 
 - Node.js 18+
 
-### Run the frontend
+### 1. Create a local environment file
+
+`frontend/.env` is not committed to the repo. Create it manually:
+
+```bash
+echo "VITE_API_BASE_URL=http://3.144.144.215:8002" > frontend/.env
+```
+
+### 2. Run the frontend
 
 ```bash
 cd frontend
@@ -104,7 +114,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The frontend is pre-configured to talk to the live AWS backend via `VITE_API_BASE_URL` in `frontend/.env`.
+Open [http://localhost:5173](http://localhost:5173). The frontend will connect to the live AWS backend using the URL set in `frontend/.env`.
 
 ---
 
@@ -138,18 +148,20 @@ TRAINING_EMBEDDING_DIM=128 TRAINING_N_EPOCHS=30 PYTHONPATH=. python -m training.
 
 ## API
 
+The inference service is accessible at the deployed AWS endpoint. Replace `<HOST>` with `localhost:8002` for local Docker use or the EC2 address for the live deployment.
+
 ```bash
 # Health check
-curl http://localhost:8002/health
+curl http://<HOST>/health
 
 # Known user (MF model)
-curl "http://localhost:8002/recommendations?user_id=user_0001&k=10"
+curl "http://<HOST>/recommendations?user_id=user_0001&k=10"
 
 # Cold-start user (popularity fallback)
-curl "http://localhost:8002/recommendations?user_id=user_9999&k=10"
+curl "http://<HOST>/recommendations?user_id=user_9999&k=10"
 
-# Ingest an event
-curl -X POST http://localhost:8001/events \
+# Ingest an event (event-producer)
+curl -X POST http://<HOST:8001>/events \
   -H "Content-Type: application/json" \
   -d '{"user_id": "user_0001", "item_id": "item_0042", "event_type": "purchase"}'
 ```
@@ -211,7 +223,7 @@ The system is designed to map cleanly to managed AWS services:
 | inference-service (EC2) | ECS Fargate or EC2 |
 | Frontend (Vite build) | Amplify Hosting |
 
-For EC2 deployment: the inference service pulls artifacts from S3 at container startup via an IAM instance role (no credentials in code). Set `VITE_API_BASE_URL=http://<EC2-IP>:8002` in `frontend/.env` to point the dashboard at the live backend.
+The inference service pulls model artifacts from S3 at container startup via an IAM instance role (no credentials in code). The frontend reads the backend URL from `VITE_API_BASE_URL`, set in a local `frontend/.env` file that is not committed to the repo.
 
 ---
 
