@@ -27,9 +27,9 @@ env/
 # ========================
 .claude/
 .DS_Store
-CLAUDE.md
 Thumbs.db
 .vscode/
+CLAUDE.md
 
 # ========================
 # Zip / artifacts
