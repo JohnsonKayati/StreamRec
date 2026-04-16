@@ -129,18 +129,29 @@ React + Vite + TypeScript + Tailwind CSS v4 + Zustand single-page app.
 ```bash
 cd frontend
 npm install
-npm run dev      # dev server on http://localhost:5173, proxies /api → localhost:8002
+npm run dev      # dev server on http://localhost:5173
 npm run build    # production build to frontend/dist/
 ```
 
-The Vite dev proxy strips the `/api` prefix before forwarding to the inference service, so the frontend never needs CORS headers. The backend must be running on port 8002 before opening the UI.
+Vite dev proxy routes (defined in `vite.config.ts`):
+- `/api/*` → `http://localhost:8002` (strips `/api` prefix, no CORS needed)
+- `/events` → `http://localhost:8001` (forwarded as-is for interaction events)
+
+Both backend services must be running before opening the UI.
 
 Key files:
-- `src/store.ts` — Zustand store; all API state lives here
-- `src/api.ts` — `fetch` wrappers with 5s timeout and typed error classes
-- `src/lib/fake-metadata.ts` — deterministic `item_id → name/category` mapping (no real catalog needed)
-- `src/components/ControlBar.tsx` — user ID input, k slider, quick-pick buttons (Known/Cold Start/Random)
-- `src/components/DiagnosticsPanel.tsx` — model name, latency (color-coded), cache HIT/MISS, request history
+- `src/store.ts` — single Zustand store; all API state, view mode, latency history, request history
+- `src/api.ts` — `fetch` wrappers (`fetchRecommendationsApi` 5s timeout, `checkHealthApi` 3s timeout)
+- `src/types.ts` — shared TypeScript types (`Recommendation`, `ApiResponse`, `LatencyPoint`, `HistoryEntry`, `ApiError`)
+- `src/lib/fake-metadata.ts` — deterministic `item_id → {name, category}` mapping (no real catalog needed)
+- `src/components/ControlBar.tsx` — user ID input, k slider, quick-pick buttons, Single/Compare mode toggle; "Random Known" samples uniformly from `user_0000–user_0999`
+- `src/components/RecommendationPanel.tsx` — single-user recommendation results
+- `src/components/ComparePanel.tsx` — side-by-side view: fetches `user_0001` (MF) and `user_9999` (popularity fallback) simultaneously via `Promise.allSettled`; isolated local state, does not touch the global store's recommendation state
+- `src/components/DiagnosticsPanel.tsx` — current request stats, latency sparkline (clickable to expand), offline evaluation metrics, request history
+- `src/components/LatencySparkline.tsx` — pure SVG sparkline with zoomed Y-axis (min/max window, `MIN_RANGE=0.5ms`); supports `variant="compact"` (default) and `variant="expanded"` (used in modal)
+- `src/components/LatencyModal.tsx` — full-screen overlay with enlarged sparkline; closes on Escape, outside click, or X button
+
+**View modes** (toggled in `ControlBar`): Single mode renders `<RecommendationPanel>`; Compare mode renders `<ComparePanel>` in the same grid column. The switch is driven by `compareMode` in the Zustand store.
 
 ## Key Design Constraints
 

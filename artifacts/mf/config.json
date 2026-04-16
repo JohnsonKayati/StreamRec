@@ -1,0 +1,5 @@
+{
+  "n_users": 1000,
+  "n_items": 499,
+  "embedding_dim": 64
+}
